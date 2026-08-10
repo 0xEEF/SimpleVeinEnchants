@@ -12,7 +12,7 @@ I am a random dev, and you should really not trust random stuff you find on the 
 Doesn't require any other plugin.
 However if you use Geyser, Bedrock players won't be able to combine any item (tools or books) with the anvil, as Minecraft Bedrock has a client-side check for valid anvil combinations that cannot be altered.
 Thus, you may install a compatibility plugin such as [Geyser Recipe Fix](https://modrinth.com/plugin/geyser-recipe-fix). Note that since that plugin is no longer updated, you may find my patches useful.
-(see https://github.com/0xEAF/GeyserRecipeFixPatched - read the whole README)
+(see https://github.com/0xEAF/GeyserRecipeFixPatches - read the whole README)
 
 ### Enchants explanation
 
