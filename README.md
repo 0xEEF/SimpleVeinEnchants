@@ -24,11 +24,12 @@ Can mine up to 64 neighboring ores per level of enchant. Maxes out at level 5 (V
 
 #### Lumberjack (axe)
 
-Can mine up to 64 neighboring logs per level of enchant. Maxes out at level 5 (V) at 320 logs.
+Can mine up to 64 neighboring logs (including nether stems/hyphae, bamboo blocks, mangrove roots, shroomlight, giant mushrooms and chorus plants) per level of enchant. Maxes out at level 5 (V) at 320 logs.
 
 #### Harvest (hoe)
 
 Can mine up to 64 neighboring crops per level of enchant, and re-places them. Maxes out at level 5 (V) at 320 crops.
+Also clears leaves, nether wart blocks, melons and pumpkins (no replanting needed; sneak to break them normally). Fire, frosted ice and cave/weeping/twisting vines are ignored.
 
 #### Excavator (pickaxe and shovel)
 
@@ -38,6 +39,8 @@ Can mine up tunnels efficiently.
 - Level III: breaks a 2x2x2 zone (in 3D)
 - Level IV: breaks a 3x3 zone (in 2D)
 - Level V: breaks a 3x3x3 zone (in 3D) (regular excavator)
+
+Vanilla break behavior is kept: ice leaves water (unless silk touch, or in the nether) and infested blocks release silverfish (unless silk touch). Obsidian is intentionally not included.
 
 #### Antigravity (shovel)
 

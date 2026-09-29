@@ -8,6 +8,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.World;
 import org.bukkit.Registry;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
@@ -15,6 +16,7 @@ import org.bukkit.block.data.Orientable;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.ExperienceOrb;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Silverfish;
 import org.bukkit.entity.Villager;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -132,25 +134,56 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
         return name.endsWith("_ORE") || material == Material.ANCIENT_DEBRIS || name.endsWith("RAW_COPPER_BLOCK") || name.endsWith("RAW_IRON_BLOCK") || name.endsWith("RAW_GOLD_BLOCK");
     }
 
-    private static final Set<Material> PICKAXE_EXCAVATOR_BLOCKS = EnumSet.of(
-            Material.STONE, Material.COBBLESTONE, Material.GRANITE, Material.DIORITE, Material.ANDESITE, Material.TUFF,
-            Material.DEEPSLATE, Material.COBBLED_DEEPSLATE, Material.CALCITE, Material.DRIPSTONE_BLOCK,
-            Material.NETHERRACK, Material.BASALT, Material.BLACKSTONE, Material.GILDED_BLACKSTONE,
-            Material.END_STONE, Material.REINFORCED_DEEPSLATE, Material.INFESTED_STONE,
-            Material.INFESTED_COBBLESTONE
-    );
-
-    private static final Set<Material> SHOVEL_EXCAVATOR_BLOCKS = EnumSet.of(
-            Material.DIRT, Material.GRASS_BLOCK, Material.PODZOL, Material.COARSE_DIRT, Material.ROOTED_DIRT,
-            Material.MYCELIUM, Material.MUD, Material.MUDDY_MANGROVE_ROOTS,
-            Material.SAND, Material.RED_SAND, Material.GRAVEL, Material.CLAY,
-            Material.SNOW, Material.SNOW_BLOCK, Material.SOUL_SAND, Material.SOUL_SOIL
-    );
-
+    private static final Set<Material> PICKAXE_EXCAVATOR_BLOCKS = buildPickaxeExcavatorBlocks();
+    private static final Set<Material> SHOVEL_EXCAVATOR_BLOCKS = buildShovelExcavatorBlocks();
     // Filtered subset of SHOVEL_EXCAVATOR_BLOCKS that are strictly affected by gravity
-    private static final Set<Material> ANTIGRAVITY_BLOCKS = EnumSet.of(
-            Material.SAND, Material.RED_SAND, Material.GRAVEL
-    );
+    // (suspicious sand/gravel are intentionally left out, they are archaeology blocks)
+    private static final Set<Material> ANTIGRAVITY_BLOCKS = buildAntigravityBlocks();
+
+    private static boolean isModernName(Material m) {
+        return !m.name().startsWith("LEGACY_");
+    }
+
+    private static Set<Material> buildPickaxeExcavatorBlocks() {
+        Set<Material> set = EnumSet.of(
+                Material.STONE, Material.COBBLESTONE, Material.MOSSY_COBBLESTONE, Material.GRANITE, Material.DIORITE, Material.ANDESITE, Material.TUFF,
+                Material.DEEPSLATE, Material.COBBLED_DEEPSLATE, Material.CALCITE, Material.DRIPSTONE_BLOCK,
+                Material.NETHERRACK, Material.BASALT, Material.SMOOTH_BASALT, Material.BLACKSTONE, Material.GILDED_BLACKSTONE,
+                Material.CRIMSON_NYLIUM, Material.WARPED_NYLIUM, Material.MAGMA_BLOCK, Material.BONE_BLOCK, Material.GLOWSTONE,
+                Material.END_STONE, Material.REINFORCED_DEEPSLATE,
+                Material.SANDSTONE, Material.RED_SANDSTONE,
+                Material.ICE, Material.PACKED_ICE, Material.BLUE_ICE
+        );
+        for (Material m : Material.values()) {
+            if (!isModernName(m)) continue;
+            String n = m.name();
+            // All infested blocks (silverfish are spawned on break, see below)
+            if (n.startsWith("INFESTED_")) set.add(m);
+            // Plain + colored terracotta, but not glazed terracotta (crafted, not natural)
+            if (n.equals("TERRACOTTA") || (n.endsWith("_TERRACOTTA") && !n.contains("GLAZED"))) set.add(m);
+        }
+        return set;
+    }
+
+    private static Set<Material> buildShovelExcavatorBlocks() {
+        Set<Material> set = EnumSet.of(
+                Material.DIRT, Material.GRASS_BLOCK, Material.PODZOL, Material.COARSE_DIRT, Material.ROOTED_DIRT,
+                Material.DIRT_PATH, Material.FARMLAND,
+                Material.MYCELIUM, Material.MUD, Material.MUDDY_MANGROVE_ROOTS,
+                Material.SAND, Material.RED_SAND, Material.GRAVEL, Material.CLAY,
+                Material.SNOW, Material.SNOW_BLOCK, Material.SOUL_SAND, Material.SOUL_SOIL
+        );
+        set.addAll(buildAntigravityBlocks());
+        return set;
+    }
+
+    private static Set<Material> buildAntigravityBlocks() {
+        Set<Material> set = EnumSet.of(Material.SAND, Material.RED_SAND, Material.GRAVEL);
+        for (Material m : Material.values()) {
+            if (isModernName(m) && m.name().endsWith("_CONCRETE_POWDER")) set.add(m);
+        }
+        return set;
+    }
 
     private boolean isExcavatorBlock(ItemStack tool, Material material) {
         if (isPickaxe(tool)) {
@@ -169,13 +202,54 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
         return material.name().replace("DEEPSLATE_", "").replace("STONE_", "").replace("NETHER_", "");
     }
 
+    // Everything Lumberjack can chop: overworld logs/wood (incl. stripped, cherry, pale oak, mangrove),
+    // nether stems/hyphae (crimson, warped), bamboo blocks, mangrove roots, shroomlight,
+    // giant mushroom blocks and chorus plants.
+    // Note: explicit check for STEM so melon/pumpkin/mushroom stems are not matched.
+    private boolean isTreeMaterial(Material material) {
+        String name = material.name();
+        if (name.endsWith("_LOG") || name.endsWith("_WOOD")) return true;
+        if (name.endsWith("_HYPHAE")) return true;
+        if (name.endsWith("_STEM") && (name.contains("CRIMSON") || name.contains("WARPED"))) return true;
+        if (name.endsWith("BAMBOO_BLOCK")) return true;
+        return isUnorientedTreeMaterial(material);
+    }
+
+    // Tree-like blocks that have no log axis (so the "vertical" check does not apply to them)
+    private boolean isUnorientedTreeMaterial(Material material) {
+        return material == Material.MANGROVE_ROOTS || material == Material.SHROOMLIGHT
+                || material == Material.RED_MUSHROOM_BLOCK || material == Material.BROWN_MUSHROOM_BLOCK
+                || material == Material.MUSHROOM_STEM || material == Material.CHORUS_PLANT;
+    }
+
     private boolean isVerticalLog(Block block) {
-        String name = block.getType().name();
-        if (!(name.endsWith("_LOG") || name.endsWith("_WOOD"))) return false;
+        Material type = block.getType();
+        if (!isTreeMaterial(type)) return false;
+        // Roots, shroomlight, giant mushrooms and chorus plants have no orientation, so they always count
+        if (isUnorientedTreeMaterial(type)) return true;
         return block.getBlockData() instanceof Orientable orientable && orientable.getAxis() == Axis.Y;
     }
 
+    // Ageable blocks that are not crops and would misbehave with the "reset age = replant" logic:
+    // fire and frosted ice would be kept alive instead of removed, and cave vines / weeping / twisting
+    // vines would keep dropping items (glow berries, fortune-boosted vines) without ever being consumed.
+    private static final Set<Material> HARVEST_BLACKLIST = EnumSet.of(
+            Material.FIRE, Material.FROSTED_ICE, Material.CAVE_VINES, Material.WEEPING_VINES, Material.TWISTING_VINES
+    );
+
+    // Blocks Harvest simply clears (no replanting): leaves, nether wart blocks, melons and pumpkins
+    private boolean isHarvestClearBlock(Material material) {
+        return material.name().endsWith("_LEAVES") || material == Material.NETHER_WART_BLOCK
+                || material == Material.WARPED_WART_BLOCK || isFlatHarvestBlock(material);
+    }
+
+    // Melons and pumpkins grow flat on the ground, so only spread horizontally (like crops)
+    private boolean isFlatHarvestBlock(Material material) {
+        return material == Material.MELON || material == Material.PUMPKIN;
+    }
+
     private boolean isMatureCrop(Block block) {
+        if (HARVEST_BLACKLIST.contains(block.getType())) return false;
         if (block.getBlockData() instanceof Ageable ageable) {
             return ageable.getAge() == ageable.getMaximumAge();
         }
@@ -192,6 +266,7 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
             case COCOA -> Material.COCOA_BEANS;
             case PITCHER_CROP -> Material.PITCHER_POD;
             case TORCHFLOWER_CROP -> Material.TORCHFLOWER_SEEDS;
+            case SWEET_BERRY_BUSH -> Material.SWEET_BERRIES;
             default -> crop;
         };
     }
@@ -222,6 +297,9 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
         } else if (hLvl > 0 && isHoe(tool) && isMatureCrop(startBlock)) {
             // Do not return on sneak here! We still want the chain-break effect.
             mode = "harvest"; maxBlocks = hLvl * 64;
+        } else if (hLvl > 0 && isHoe(tool) && isHarvestClearBlock(targetMat)) {
+            if (player.isSneaking()) return; // Nothing to replant here, so sneaking just breaks normally
+            mode = "clear"; maxBlocks = hLvl * 64;
         } else if (eLvl > 0 && isExcavatorBlock(tool, targetMat)) {
             if (player.isSneaking()) return; // Ignore excavator, break normally
             mode = "excavator"; maxBlocks = -1; // Fixed bounds system
@@ -299,12 +377,15 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
             queue.add(startBlock);
             visited.add(startBlock);
 
+            // Crops, melons and pumpkins spread horizontally only; everything else spreads in 3D
+            int dyRange = (mode.equals("harvest") || (mode.equals("clear") && isFlatHarvestBlock(targetMat))) ? 0 : 1;
+
             while (!queue.isEmpty() && toBreak.size() < maxBlocks) {
                 Block current = queue.poll();
                 toBreak.add(current);
 
                 for (int dx = -1; dx <= 1; dx++) {
-                    for (int dy = (mode.equals("harvest") ? 0 : -1); dy <= (mode.equals("harvest") ? 0 : 1); dy++) {
+                    for (int dy = -dyRange; dy <= dyRange; dy++) {
                         for (int dz = -1; dz <= 1; dz++) {
                             if (dx == 0 && dy == 0 && dz == 0) continue;
                             Block neighbor = current.getRelative(dx, dy, dz);
@@ -316,6 +397,7 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
                                 case "veinmine" -> getBaseOreName(neighbor.getType()).equals(getBaseOreName(targetMat)) && isOre(neighbor.getType());
                                 case "lumberjack" -> neighbor.getType() == targetMat && isVerticalLog(neighbor);
                                 case "harvest" -> neighbor.getType() == targetMat && isMatureCrop(neighbor);
+                                case "clear" -> neighbor.getType() == targetMat;
                                 default -> false;
                             };
 
@@ -354,8 +436,12 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
 
         event.setCancelled(true);
 
+        Enchantment silkTouch = Registry.ENCHANTMENT.get(NamespacedKey.minecraft("silk_touch"));
+        boolean hasSilkTouch = silkTouch != null && tool.getEnchantmentLevel(silkTouch) > 0;
+
         // Universal Drop Processing
         for (Block block : toBreak) {
+            Material brokenType = block.getType();
             Collection<ItemStack> drops = block.getDrops(tool);
 
             if (mode.equals("harvest") && !player.isSneaking()) {
@@ -384,7 +470,20 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
                     ExperienceOrb orb = block.getWorld().spawn(block.getLocation(), ExperienceOrb.class);
                     orb.setExperience(exp);
                 }
-                block.setType(Material.AIR);
+
+                // Keep vanilla break behavior: regular ice leaves water (not in the nether, not with silk touch)
+                Material replacement = Material.AIR;
+                if (brokenType == Material.ICE && !hasSilkTouch
+                        && block.getWorld().getEnvironment() != World.Environment.NETHER) {
+                    Block below = block.getRelative(0, -1, 0);
+                    if (below.getType().isSolid() || below.isLiquid()) replacement = Material.WATER;
+                }
+                block.setType(replacement);
+
+                // Keep vanilla break behavior: infested blocks release a silverfish unless mined with silk touch
+                if (!hasSilkTouch && brokenType.name().startsWith("INFESTED_")) {
+                    block.getWorld().spawn(block.getLocation().add(0.5, 0, 0.5), Silverfish.class);
+                }
             }
         }
 
