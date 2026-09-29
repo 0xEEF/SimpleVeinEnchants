@@ -45,4 +45,4 @@ Vanilla break behavior is kept: ice leaves water (unless silk touch, or in the n
 #### Antigravity (shovel)
 
 Can mine all the gravity affected blocks that are going to fall after breaking the selected block. Replaces the "break block then put torch" loop to break falling blocks like gravel.
-Can break up to 5 gravity-affected blocks that are breakable with a shovel (ie. gravel, sand but not anvil) per level of enchant, maxing at level 5 (V) at 25 falling blocks.
+Can break up to 5 gravity-affected blocks that are breakable with a shovel (eg. gravel, sand but not anvil) per level of enchant, maxing at level 5 (V) at 25 falling blocks.
