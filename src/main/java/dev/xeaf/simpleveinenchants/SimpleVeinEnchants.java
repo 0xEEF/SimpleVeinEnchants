@@ -305,7 +305,7 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
             mode = "excavator"; maxBlocks = -1; // Fixed bounds system
         }
 
-        boolean hasAntigrav = (aLvl > 0 && isShovel(tool) && !player.isSneaking());
+        boolean hasAntigrav = (aLvl > 0 && (isShovel(tool) || isPickaxe(tool)) && !player.isSneaking());
 
         // If no enchantments applied at all, exit out and let vanilla handle the single block.
         if (mode.equals("single") && !hasAntigrav) {

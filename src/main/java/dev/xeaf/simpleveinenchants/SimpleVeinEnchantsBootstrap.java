@@ -84,7 +84,7 @@ public class SimpleVeinEnchantsBootstrap implements PluginBootstrap {
             event.registry().register(
                 SimpleVeinEnchants.ANTIGRAVITY_KEY,
                 b -> b.description(Component.text("Antigravity").color(NamedTextColor.GRAY))
-                      .supportedItems(shovelsTag)
+                      .supportedItems(excavatorSet)
                       .weight(2)
                       .maxLevel(5)
                       .minimumCost(EnchantmentCost.of(15, 9))
