@@ -11,16 +11,19 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.Registry;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockState;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.Orientable;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.ExperienceOrb;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Silverfish;
 import org.bukkit.entity.Villager;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.entity.VillagerAcquireTradeEvent;
 import org.bukkit.inventory.ItemStack;
@@ -33,6 +36,7 @@ import org.bukkit.util.Vector;
 
 import java.lang.reflect.Method;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SimpleVeinEnchants extends JavaPlugin implements Listener {
 
@@ -45,6 +49,10 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
     private static final List<TypedKey<Enchantment>> CUSTOM_ENCHANT_KEYS =
             List.of(VEINMINE_KEY, LUMBERJACK_KEY, HARVEST_KEY, EXCAVATOR_KEY, ANTIGRAVITY_KEY);
     private static final Random RANDOM = new Random();
+
+    // Players for whom we are currently firing BlockBreakEvent for the *extra* blocks of a multi-break.
+    // Our own onBlockBreak must ignore those events, otherwise it would recurse.
+    private final Set<UUID> internalBreaks = ConcurrentHashMap.newKeySet();
 
     // True only if the Floodgate plugin is actually installed. Guards every Bedrock-only
     // code path below, and BedrockCompat (the only class that references Floodgate types)
@@ -274,6 +282,7 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Player player = event.getPlayer();
+        if (internalBreaks.contains(player.getUniqueId())) return;
         ItemStack tool = player.getInventory().getItemInMainHand();
         Block startBlock = event.getBlock();
 
@@ -434,67 +443,98 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
             return;
         }
 
-        event.setCancelled(true);
+        // Harvest must cancel the vanilla break, because the crop is replanted instead of removed.
+        // Every other mode lets vanilla break the clicked block itself, so its loot, XP, Silk Touch,
+        // BlockDropItemEvent and tool damage behave exactly like a normal break. We only handle the extras.
+        boolean vanillaBreaksStart = !mode.equals("harvest");
+        if (vanillaBreaksStart) {
+            toBreak.remove(startBlock);
+            if (toBreak.isEmpty()) return;
+        } else {
+            event.setCancelled(true);
+        }
 
         Enchantment silkTouch = Registry.ENCHANTMENT.get(NamespacedKey.minecraft("silk_touch"));
         boolean hasSilkTouch = silkTouch != null && tool.getEnchantmentLevel(silkTouch) > 0;
+        int baseExp = mode.equals("veinmine") ? event.getExpToDrop() : 0;
 
-        // Universal Drop Processing
-        for (Block block : toBreak) {
-            Material brokenType = block.getType();
-            Collection<ItemStack> drops = block.getDrops(tool);
+        int broken = 0;
+        internalBreaks.add(player.getUniqueId());
+        try {
+            for (Block block : toBreak) {
+                boolean isStart = block.equals(startBlock);
+                Material brokenType = block.getType();
+                BlockState state = block.getState();
+                int exp = isStart ? event.getExpToDrop() : baseExp;
+                boolean dropItems = true;
 
-            if (mode.equals("harvest") && !player.isSneaking()) {
-                Ageable data = (Ageable) block.getBlockData();
-                data.setAge(0);
-                block.setBlockData(data);
+                // Extra blocks go through a real BlockBreakEvent so protection plugins can veto them
+                // and other plugins (e.g. Kite scripts) can adjust drops. The clicked block was already
+                // covered by the original event.
+                if (!isStart) {
+                    BlockBreakEvent sub = new BlockBreakEvent(block, player);
+                    sub.setExpToDrop(baseExp);
+                    getServer().getPluginManager().callEvent(sub);
+                    if (sub.isCancelled()) continue;
+                    exp = sub.getExpToDrop();
+                    dropItems = sub.isDropItems();
+                }
 
-                Material requiredSeed = getSeedMaterial(targetMat);
-                boolean seedRemoved = false;
+                List<ItemStack> drops = dropItems ? new ArrayList<>(blockDrops(block, tool, player, hasSilkTouch)) : new ArrayList<>();
+                broken++;
 
-                for (ItemStack drop : drops) {
-                    if (!seedRemoved && drop.getType() == requiredSeed) {
-                        drop.setAmount(drop.getAmount() - 1);
-                        seedRemoved = true;
+                if (mode.equals("harvest") && !player.isSneaking()) {
+                    Ageable data = (Ageable) block.getBlockData();
+                    data.setAge(0);
+                    block.setBlockData(data);
+
+                    Material requiredSeed = getSeedMaterial(targetMat);
+                    boolean seedRemoved = false;
+                    for (ItemStack drop : drops) {
+                        if (!seedRemoved && drop.getType() == requiredSeed) {
+                            drop.setAmount(drop.getAmount() - 1);
+                            seedRemoved = true;
+                        }
                     }
-                    if (drop.getAmount() > 0) {
-                        block.getWorld().dropItemNaturally(block.getLocation(), drop);
+                    dropBlockItems(player, block, state, drops);
+                } else {
+                    // Keep vanilla break behavior: regular ice leaves water (not in the nether, not with silk touch)
+                    Material replacement = Material.AIR;
+                    if (brokenType == Material.ICE && !hasSilkTouch
+                            && block.getWorld().getEnvironment() != World.Environment.NETHER) {
+                        Block below = block.getRelative(0, -1, 0);
+                        if (below.getType().isSolid() || below.isLiquid()) replacement = Material.WATER;
                     }
-                }
-            } else {
-                for (ItemStack drop : drops) {
-                    if (drop.getAmount() > 0) block.getWorld().dropItemNaturally(block.getLocation(), drop);
-                }
-                int exp = event.getExpToDrop();
-                if (exp > 0 && mode.equals("veinmine")) {
-                    ExperienceOrb orb = block.getWorld().spawn(block.getLocation(), ExperienceOrb.class);
-                    orb.setExperience(exp);
-                }
+                    block.setType(replacement);
 
-                // Keep vanilla break behavior: regular ice leaves water (not in the nether, not with silk touch)
-                Material replacement = Material.AIR;
-                if (brokenType == Material.ICE && !hasSilkTouch
-                        && block.getWorld().getEnvironment() != World.Environment.NETHER) {
-                    Block below = block.getRelative(0, -1, 0);
-                    if (below.getType().isSolid() || below.isLiquid()) replacement = Material.WATER;
-                }
-                block.setType(replacement);
+                    // Fires BlockDropItemEvent so that listeners (e.g. auto-smelt) see these drops too.
+                    dropBlockItems(player, block, state, drops);
 
-                // Keep vanilla break behavior: infested blocks release a silverfish unless mined with silk touch
-                if (!hasSilkTouch && brokenType.name().startsWith("INFESTED_")) {
-                    block.getWorld().spawn(block.getLocation().add(0.5, 0, 0.5), Silverfish.class);
+                    if (exp > 0 && dropItems) {
+                        ExperienceOrb orb = block.getWorld().spawn(block.getLocation().add(0.5, 0.5, 0.5), ExperienceOrb.class);
+                        orb.setExperience(exp);
+                    }
+
+                    // Keep vanilla break behavior: infested blocks release a silverfish unless mined with silk touch
+                    if (!hasSilkTouch && brokenType.name().startsWith("INFESTED_")) {
+                        block.getWorld().spawn(block.getLocation().add(0.5, 0, 0.5), Silverfish.class);
+                    }
                 }
             }
+        } finally {
+            internalBreaks.remove(player.getUniqueId());
         }
 
-        if (player.getGameMode() != GameMode.CREATIVE) {
+        if (player.getGameMode() != GameMode.CREATIVE && broken > 0) {
             ItemMeta meta = tool.getItemMeta();
             if (meta instanceof Damageable damageable) {
                 Enchantment unbreaking = Registry.ENCHANTMENT.get(NamespacedKey.minecraft("unbreaking"));
                 int unbreakingLevel = unbreaking != null ? tool.getEnchantmentLevel(unbreaking) : 0;
 
+                // Vanilla already damages the tool once for the clicked block when it breaks it itself,
+                // so we only charge for the blocks we broke.
                 int damageToApply = 0;
-                for (int i = 0; i < toBreak.size(); i++) {
+                for (int i = 0; i < broken; i++) {
                     if (unbreakingLevel <= 0 || RANDOM.nextInt(unbreakingLevel + 1) == 0) {
                         damageToApply++;
                     }
@@ -509,6 +549,43 @@ public class SimpleVeinEnchants extends JavaPlugin implements Listener {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Loot for a block we break ourselves. Reinforced deepslate has no loot table, so
+     * Block#getDrops returns nothing even with Silk Touch; handle it explicitly.
+     */
+    private Collection<ItemStack> blockDrops(Block block, ItemStack tool, Player player, boolean silkTouch) {
+        if (block.getType() == Material.REINFORCED_DEEPSLATE) {
+            return silkTouch ? List.of(new ItemStack(Material.REINFORCED_DEEPSLATE)) : List.of();
+        }
+        return block.getDrops(tool, player);
+    }
+
+    /**
+     * Spawns block drops the same way vanilla does: as not-yet-spawned Item entities that are passed
+     * through BlockDropItemEvent first, so listeners can modify (smelt, etc.) or cancel them.
+     */
+    private void dropBlockItems(Player player, Block block, BlockState state, List<ItemStack> drops) {
+        World world = block.getWorld();
+        List<Item> items = new ArrayList<>();
+        for (ItemStack drop : drops) {
+            if (drop == null || drop.getType().isAir() || drop.getAmount() <= 0) continue;
+            Location loc = block.getLocation().add(
+                    0.25 + RANDOM.nextDouble() * 0.5, 0.25 + RANDOM.nextDouble() * 0.5, 0.25 + RANDOM.nextDouble() * 0.5);
+            Item item = world.createEntity(loc, Item.class);
+            item.setItemStack(drop);
+            item.setPickupDelay(10);
+            items.add(item);
+        }
+        if (items.isEmpty()) return;
+
+        BlockDropItemEvent dropEvent = new BlockDropItemEvent(block, state, player, items);
+        getServer().getPluginManager().callEvent(dropEvent);
+        if (dropEvent.isCancelled()) return;
+        for (Item item : dropEvent.getItems()) {
+            world.addEntity(item);
         }
     }
 
